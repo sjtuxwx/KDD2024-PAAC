@@ -1,0 +1,18 @@
+name: PAAC
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9.7
+  - pytorch=1.12.0
+  - cudatoolkit=11.3
+  - numba=0.54.1
+  - numpy=1.20.0
+  - pandas=1.3.4
+  - scipy
+  - tqdm
+  - pip
+  - pip:
+    - faiss-gpu==1.7.2

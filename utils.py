@@ -104,8 +104,8 @@ def split_bacth_items(items,popular):
     G1,G2=[],[]
     items_sorted=list(np.array(items)[np.argsort(np.array(popular)[items])])
     num=int(len(items_sorted)/2)
-    G1.extend(items_sorted[0:num])
-    G2.extend(items_sorted[num:])
+    G1.extend(items_sorted[0:num]) # 不热门
+    G2.extend(items_sorted[num:]) # 热门
     return np.array(G1),np.array(G2)
 
 def alignment_user(x, y):
