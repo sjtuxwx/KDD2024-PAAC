@@ -1,0 +1,44 @@
+# Python 缓存与运行时文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg/
+*.whl
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+venv/
+env/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# VS Code 本地配置
+.vscode/
+*.code-workspace
+.history/
+*.vs/
+*.vscode/
+*.code-workspace
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+
+# macOS / Windows 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# 说明文档本地副本（如有）
+README.local.md
+OOD_result/
