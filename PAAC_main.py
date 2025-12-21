@@ -41,6 +41,7 @@ def main_args():
     args.add_argument('--align_reg_list', default='[1]', type=str)
     args.add_argument('--lambada_list', default='[0.2]', type=str)
     args.add_argument('--gama_list', default='[0.2]', type=str)
+    args.add_argument('--tau', default=0.25, type=float)
     #args.add_argument('--align_reg_list', default='[100]', type=str)
 
     # train
@@ -71,6 +72,7 @@ class PAAC(torch.nn.Module):
         self.pop_train=data.pop_train_count
         self.lambda2=config.lambda2
         self.gamma=config.gamma
+        self.tau = config.tau
 
         # data
         self.num_users = data.num_users
@@ -109,8 +111,11 @@ class PAAC(torch.nn.Module):
         return user_emb, item_emb
 
     def bpr_loss(self, user_emb, pos_emb, neg_emb):
-        pos_score = torch.mul(user_emb, pos_emb).sum(dim=1)
-        neg_score = torch.mul(user_emb, neg_emb).sum(dim=1)
+        u = F.normalize(user_emb, dim=1, eps=1e-8)
+        p = F.normalize(pos_emb, dim=1, eps=1e-8)
+        n = F.normalize(neg_emb, dim=1, eps=1e-8)
+        pos_score = self.tau * torch.mul(u, p).sum(dim=1)
+        neg_score = self.tau * torch.mul(u, n).sum(dim=1)
         bpr_loss = - \
             torch.log(10e-8 + torch.sigmoid(pos_score - neg_score)).mean()
 
@@ -215,6 +220,11 @@ def train(config, data, model, optimizer, early_stopping, logger,train_step=1):
             data.val_U2I, data.train_U2I, user_embedding, item_embedding)
         logger.info('val_hr@100:{:.6f}   val_recall@100:{:.6f}   val_ndcg@100:{:.6f}   train_time:{}s   test_tiem:{}s'.format(
             val_hr, val_recall, val_ndcg, (trin_time-start).seconds, (datetime.datetime.now() - trin_time).seconds))
+        item_is_pop = utils.build_global_pop_mask(data.pop_train_count, 0.5)
+        _, _, _, val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+            data.val_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+        logger.info('val_pop_hr@20:{:.6f}   val_pop_recall@20:{:.6f}   val_pop_ndcg@20:{:.6f}   val_unpop_hr@20:{:.6f}   val_unpop_recall@20:{:.6f}   val_unpop_ndcg@20:{:.6f}'.format(
+            val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg))
 
         # early_stopping
         early_stopping(val_hr, model, epoch)
@@ -276,14 +286,27 @@ def main(config):
         data.val_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info('=======Best   performance=====\nval_hr@20:{:.6f}   val_recall@20:{:.6f}   val_ndcg@20:{:.6f} '.format(
         val_hr, val_recall, val_ndcg))
+    item_is_pop = utils.build_global_pop_mask(data.pop_train_count, 0.5)
+    _, _, _, val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.val_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\nval_pop_hr@20:{:.6f}   val_pop_recall@20:{:.6f}   val_pop_ndcg@20:{:.6f}   val_unpop_hr@20:{:.6f}   val_unpop_recall@20:{:.6f}   val_unpop_ndcg@20:{:.6f} '.format(
+        val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg))
     test_OOD_hr, test_OOD_recall, test_OOD_ndcg = mini_batch_test.test_acc_batch(
         data.test_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info('=======Best   performance=====\ntest_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f} '.format(
         test_OOD_hr, test_OOD_recall, test_OOD_ndcg))
+    _, _, _, test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.test_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\ntest_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} '.format(
+        test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg))
     test_IID_hr, test_IID_recall, test_IID_ndcg = mini_batch_test.test_acc_batch(
         data.test_iid_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info('=======Best   performance=====\ntest_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} '.format(
         test_IID_hr, test_IID_recall, test_IID_ndcg))
+    _, _, _, test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.test_iid_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\ntest_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} '.format(
+        test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg))
     return val_hr, val_recall, val_ndcg,test_OOD_hr, test_OOD_recall, test_OOD_ndcg ,test_IID_hr, test_IID_recall, test_IID_ndcg,result_path
 
 if __name__ == '__main__':

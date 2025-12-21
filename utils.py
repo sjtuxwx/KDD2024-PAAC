@@ -111,3 +111,12 @@ def split_bacth_items(items,popular):
 def alignment_user(x, y):
     x, y = F.normalize(x, dim=-1), F.normalize(y, dim=-1)
     return (x - y).norm(p=2, dim=1).pow(2).mean()
+
+def build_global_pop_mask(popular_counts, split_ratio=0.5):
+    idx_sorted = np.argsort(np.array(popular_counts))
+    n = len(idx_sorted)
+    half = int(n * split_ratio)
+    item_is_pop = np.zeros(n, dtype=np.int8)
+    pop_idx = idx_sorted[half:]
+    item_is_pop[pop_idx] = 1
+    return item_is_pop
