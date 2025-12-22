@@ -289,6 +289,76 @@ def next_batch_pairwise(data,batch_size):
             j_idx.append(neg_item)
         yield u_idx, i_idx, j_idx
 
+def next_batch_pairwise_pop_aware(data, batch_size, model):
+    training_data = data.training_data
+    shuffle(training_data)
+    batch_id = 0
+    data_size = len(training_data)
+    
+    # Pre-calculate item popularity frequencies if not already available
+    # Assuming data.pop_train_count stores popularity counts or frequencies
+    pop_freq = np.array(data.pop_train_count)
+    item_list = list(range(data.num_items))
+    
+    while batch_id < data_size:
+        if batch_id + batch_size <= data_size:
+            users = [training_data[idx][0] for idx in range(batch_id, batch_size + batch_id)]
+            items = [training_data[idx][1] for idx in range(batch_id, batch_size + batch_id)]
+            batch_id += batch_size
+        else:
+            users = [training_data[idx][0] for idx in range(batch_id, data_size)]
+            items = [training_data[idx][1] for idx in range(batch_id, data_size)]
+            batch_id = data_size
+            
+        u_idx, i_idx, j_idx = [], [], []
+        
+        # Get current embeddings for score calculation
+        # Use no_grad to save memory/compute
+        with torch.no_grad():
+            user_all_emb, item_all_emb = model.forward(perturbed=False)
+        
+        for i, user in enumerate(users):
+            pos_item = items[i]
+            pos_pop = pop_freq[pos_item]
+            
+            # Calculate positive score
+            u_vec = user_all_emb[user]
+            pos_vec = item_all_emb[pos_item]
+            score_pos = torch.sum(u_vec * pos_vec).item()
+            
+            final_neg = -1
+            found_strict = False
+            
+            # Try to find a "True Negative"
+            # Criteria: Pop(neg) > Pop(pos) AND Score(neg) < Score(pos)
+            for _ in range(10): 
+                cand = choice(item_list)
+                while cand in data.train_U2I[user]: # Basic conflict check
+                    cand = choice(item_list)
+                
+                # Check Popularity
+                if pop_freq[cand] > pos_pop:
+                    # Check Score
+                    cand_vec = item_all_emb[cand]
+                    score_cand = torch.sum(u_vec * cand_vec).item()
+                    
+                    if score_cand < score_pos:
+                        final_neg = cand
+                        found_strict = True
+                        break
+            
+            if not found_strict: # Fallback to random
+                cand = choice(item_list)
+                while cand in data.train_U2I[user]:
+                    cand = choice(item_list)
+                final_neg = cand
+                
+            i_idx.append(pos_item)
+            u_idx.append(user)
+            j_idx.append(final_neg)
+            
+        yield u_idx, i_idx, j_idx
+
 
 
 def user_items_2_group_pop(data):
