@@ -46,7 +46,7 @@ def main_args():
     args.add_argument('--EarlyStop', default=10, type=int)
     args.add_argument('--emb_size', default=64, type=int)
     args.add_argument('--num_epoch', default=1, type=int)
-    args.add_argument('--keep_layer_list', default='[1]', type=str)
+    args.add_argument('--keep_layers_list', default='[1]', type=str)
 
     args.add_argument(
         '--topks', default='[20]', type=str)
@@ -103,16 +103,18 @@ class PAAC(torch.nn.Module):
                 ego_embeddings = ego_embeddings + torch.sign(ego_embeddings) * F.normalize(random_noise,
                                                                                            dim=1) * self.eps
             all_emb = all_emb + [ego_embeddings]
+            # print(ego_embeddings.shape)
             if idx == self.keep_layer:
-                first_view = torch.split(ego_embeddings, [self.emb_size, self.emb_size], dim=-1)
-                idx += 1
+                first_view = torch.split(ego_embeddings, [self.num_users, self.num_items])
             if idx == self.layers:
-                final_view = torch.split(ego_embeddings, [self.emb_size, self.emb_size], dim=-1)
+                final_view = torch.split(ego_embeddings, [self.num_users, self.num_items])
+            idx += 1
         all_emb = torch.stack(all_emb, dim=1)
         all_emb = torch.mean(all_emb, dim=1)
         user_emb, item_emb = torch.split(
             all_emb, [self.num_users, self.num_items])
-        return user_emb, item_emb, first_view, final_view
+        # print(len(final_view))
+        return user_emb, item_emb, first_view, [user_emb, item_emb]
 
     def bpr_loss(self, user_emb, pos_emb, neg_emb):
         pos_score = torch.mul(user_emb, pos_emb).sum(dim=1)
@@ -127,20 +129,20 @@ class PAAC(torch.nn.Module):
 
     def xcl_loss(self, first_view, final_view, u_idx, i_idx, j_idx):
         u_idx = torch.tensor(u_idx)
-        # bacth_pop, batch_unpop = utils.split_bacth_items(i_idx, self.pop_train)
-        # batch_users = torch.unique(u_idx).type(torch.long).to(self.device)
-        # bacth_pop = torch.tensor(bacth_pop)
-        # bacth_pop = torch.unique(bacth_pop).type(torch.long).to(self.device)
-        # batch_unpop = torch.tensor(batch_unpop)
-        # batch_unpop = torch.unique(batch_unpop).type(torch.long).to(self.device)
+        bacth_pop, batch_unpop = utils.split_bacth_items(i_idx, self.pop_train)
+        batch_users = torch.unique(u_idx).type(torch.long).to(self.device)
+        bacth_pop = torch.tensor(bacth_pop)
+        bacth_pop = torch.unique(bacth_pop).type(torch.long).to(self.device)
+        batch_unpop = torch.tensor(batch_unpop)
+        batch_unpop = torch.unique(batch_unpop).type(torch.long).to(self.device)
         user_view_1, item_view_1 = first_view
         user_view_2, item_view_2 = final_view
         user_cl_loss = metrics.InfoNCE(
-            user_view_1, user_view_2, self.temperature) * self.cl_rate
-        item_cl_pop = self.gamma * metrics.InfoNCE_i(item_view_1, item_view_2,
-                                                     item_view_2, self.temperature, self.lambda2)
-        item_cl_unpop = (1 - self.gamma) * metrics.InfoNCE_i(item_view_1, item_view_2,
-                                                             item_view_2, self.temperature, self.lambda2)
+            user_view_1[batch_users], user_view_2[batch_users], self.temperature) * self.cl_rate
+        item_cl_pop = self.gamma * metrics.InfoNCE_i(item_view_1[bacth_pop], item_view_2[bacth_pop],
+                                                     item_view_2[batch_unpop], self.temperature, self.lambda2)
+        item_cl_unpop = (1 - self.gamma) * metrics.InfoNCE_i(item_view_1[batch_unpop], item_view_2[batch_unpop],
+                                                             item_view_2[bacth_pop], self.temperature, self.lambda2)
         item_cl_loss = (item_cl_pop + item_cl_unpop) * self.cl_rate
         cl_loss = user_cl_loss + item_cl_loss
         return cl_loss, user_cl_loss, item_cl_loss
@@ -367,7 +369,7 @@ if __name__ == '__main__':
                                          'a+')
                                 config.temperature = temperature
                                 config.cl_rate = cl_rate
-                                config.keep_layers = keep_layer
+                                config.keep_layer = keep_layer
                                 config.layers = layers
                                 config.align_reg = align_reg
                                 config.lambda2 = lambda2
