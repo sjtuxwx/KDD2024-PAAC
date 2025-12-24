@@ -207,11 +207,19 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
         # val
         model.eval()
         user_embedding, item_embedding = test(model)
+        logger.info('len(val_U2I)=%d' % len(data.val_U2I))
+        logger.info('len(test_U2I)=%d' % len(data.test_U2I))
         val_hr, val_recall, val_ndcg = mini_batch_test.test_acc_batch(
             data.val_U2I, data.train_U2I, user_embedding, item_embedding)
+        
+        # Pop/Unpop Split Evaluation (Validation)
+        item_is_pop = utils.build_global_pop_mask(data.pop_train_count, 0.5)
+        _, _, _, val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+            data.val_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+
         logger.info(
-            'val_hr@100:{:.6f}   val_recall@100:{:.6f}   val_ndcg@100:{:.6f}   train_time:{}s   test_tiem:{}s'.format(
-                val_hr, val_recall, val_ndcg, (trin_time - start).seconds,
+            'val_hr@100:{:.6f}   val_recall@100:{:.6f}   val_ndcg@100:{:.6f}   val_pop_hr:{:.6f}   val_pop_recall:{:.6f}   val_pop_ndcg:{:.6f}   val_unpop_hr:{:.6f}   val_unpop_recall:{:.6f}   val_unpop_ndcg:{:.6f}   train_time:{}s   test_tiem:{}s'.format(
+                val_hr, val_recall, val_ndcg, val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg, (trin_time - start).seconds,
                 (datetime.datetime.now() - trin_time).seconds))
 
         # early_stopping
@@ -265,20 +273,44 @@ def main(config):
     model_dict = model.load_state_dict(torch.load(result_path + "/best_val_epoch.pt"))
     user_embedding, item_embedding = test(model)
 
+    logger.info('len(val_U2I)=%d' % len(data.val_U2I))
+    logger.info('len(test_U2I)=%d' % len(data.test_U2I))
+
     val_hr, val_recall, val_ndcg = mini_batch_test.test_acc_batch(
         data.val_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info('=======Best   performance=====\nval_hr@20:{:.6f}   val_recall@20:{:.6f}   val_ndcg@20:{:.6f} '.format(
         val_hr, val_recall, val_ndcg))
+
+    # Pop/Unpop Split Evaluation (Validation)
+    item_is_pop = utils.build_global_pop_mask(data.pop_train_count, 0.5)
+    _, _, _, val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.val_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\nval_pop_hr@20:{:.6f}   val_pop_recall@20:{:.6f}   val_pop_ndcg@20:{:.6f}   val_unpop_hr@20:{:.6f}   val_unpop_recall@20:{:.6f}   val_unpop_ndcg@20:{:.6f} '.format(
+        val_pop_hr, val_pop_recall, val_pop_ndcg, val_unpop_hr, val_unpop_recall, val_unpop_ndcg))
+
     test_OOD_hr, test_OOD_recall, test_OOD_ndcg = mini_batch_test.test_acc_batch(
         data.test_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info(
         '=======Best   performance=====\ntest_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f} '.format(
             test_OOD_hr, test_OOD_recall, test_OOD_ndcg))
+            
+    # Pop/Unpop Split Evaluation (Test OOD)
+    _, _, _, test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.test_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\ntest_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} '.format(
+        test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg))
+
     test_IID_hr, test_IID_recall, test_IID_ndcg = mini_batch_test.test_acc_batch(
         data.test_iid_U2I, data.train_U2I, user_embedding, item_embedding)
     logger.info(
         '=======Best   performance=====\ntest_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} '.format(
             test_IID_hr, test_IID_recall, test_IID_ndcg))
+            
+    # Pop/Unpop Split Evaluation (Test IID)
+    _, _, _, test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg = mini_batch_test.test_acc_batch_pop_split(
+        data.test_iid_U2I, data.train_U2I, user_embedding, item_embedding, item_is_pop)
+    logger.info('=======Best   performance=====\ntest_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} '.format(
+        test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg))
     return val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, result_path
 
 

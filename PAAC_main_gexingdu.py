@@ -39,6 +39,8 @@ def main_args():
     args.add_argument('--align_reg_list', default='[1]', type=str)
     args.add_argument('--lambada_list', default='[0.2]', type=str)
     args.add_argument('--gama_list', default='[0.2]', type=str)
+    args.add_argument('--tau_list', default='[0.1]', type=str)
+    args.add_argument('--pop_gamma_list', default='[0.8]', type=str)
     # args.add_argument('--align_reg_list', default='[100]', type=str)
 
     # train
@@ -68,6 +70,7 @@ class PAAC(torch.nn.Module):
         self.pop_train = data.pop_train_count
         self.lambda2 = config.lambda2
         self.gamma = config.gamma
+        self.pop_gamma = config.pop_gamma
 
         # data
         self.num_users = data.num_users
@@ -88,7 +91,7 @@ class PAAC(torch.nn.Module):
         self.W_pop = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty(self.emb_size, self.emb_size)))
         self.b_pop = torch.nn.Parameter(torch.zeros(1))
         self.w1 = torch.nn.Parameter(torch.ones(1))
-        self.tau = 0.1
+        self.tau = config.tau
 
         # Calculate global max pop for normalization
         # Register as buffer to ensure it moves to device with model
@@ -129,8 +132,8 @@ class PAAC(torch.nn.Module):
         pos_f = self.pop_count_tensor[pos_idx]
         neg_f = self.pop_count_tensor[neg_idx]
         
-        pos_p = torch.pow(pos_f / self.max_pop, self.gamma) 
-        neg_p = torch.pow(neg_f / self.max_pop, self.gamma)
+        pos_p = torch.pow(pos_f / self.max_pop, self.pop_gamma) 
+        neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
 
         # 3. Bilinear Sensitivity beta
         u_w = torch.matmul(user_emb, self.W_pop)
@@ -192,7 +195,7 @@ class PAAC(torch.nn.Module):
         # Popularity processing
         # item_idx can be iterable
         f_i = self.pop_count_tensor[item_idx]
-        p_i = torch.pow(f_i / self.max_pop, self.gamma)
+        p_i = torch.pow(f_i / self.max_pop, self.pop_gamma)
         
         u_w = torch.matmul(u_emb, self.W_pop)
         beta = torch.sigmoid(torch.mul(u_w, i_emb).sum(dim=-1) + self.b_pop)
@@ -214,7 +217,7 @@ class PAAC(torch.nn.Module):
         
         # 2. Popularity & Beta
         # [num_items]
-        p_i = torch.pow(self.pop_count_tensor / self.max_pop, self.gamma)
+        p_i = torch.pow(self.pop_count_tensor / self.max_pop, self.pop_gamma)
         
         # [num_users, emb_size]
         u_w = torch.matmul(user_emb, self.W_pop)
@@ -399,26 +402,32 @@ if __name__ == '__main__':
                             config.model, config.dataset_name))
     if not os.path.exists(result_path):
         os.makedirs(result_path)
-    f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
+   
     for cl_rate in ast.literal_eval(config.cl_rate_list):
         for layers in ast.literal_eval(config.layers_list):
             for align_reg in ast.literal_eval(config.align_reg_list):
                 for temperature in ast.literal_eval(config.temperature_list):
                     for lambda2 in ast.literal_eval(config.lambada_list):
                         for gamma in ast.literal_eval(config.gama_list):
-                            config.temperature = temperature
-                            config.cl_rate = cl_rate
-                            config.layers = layers
-                            config.align_reg = align_reg
-                            config.lambda2 = lambda2
-                            config.gamma = gamma
-                            val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, result_path = main(
-                                config)
-                            f.write('\n')
-                            f.write(
-                                '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n  Resulst_path:{}\n '
-                                .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2,
-                                        val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
-                                        test_IID_hr, test_IID_recall, test_IID_ndcg, result_path))
-                            f.write('\n')
-    f.close()
+                            for tau in ast.literal_eval(config.tau_list):
+                                for pop_gamma in ast.literal_eval(config.pop_gamma_list):
+                                    f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
+                                    config.temperature = temperature
+                                    config.cl_rate = cl_rate
+                                    config.layers = layers
+                                    config.align_reg = align_reg
+                                    config.lambda2 = lambda2
+                                    config.gamma = gamma
+                                    config.pop_gamma = pop_gamma
+                                    config.tau=tau
+                                    val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, result_path = main(
+                                        config)
+                                    f.write('\n')
+                                    f.write(
+                                        '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}====tau:{}====pop_gamma:{}====\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n  Resulst_path:{}\n '
+                                        .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.tau, config.pop_gamma,
+                                                val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
+                                                test_IID_hr, test_IID_recall, test_IID_ndcg, result_path))
+                                    f.write('\n')
+                                    f.close()
+    # f.close()
