@@ -199,3 +199,285 @@ def test_acc_batch_pop_split(_test_U2I, _train_U2I,  _user_matrix, _item_matrix,
     unpop_recall = unpop_recall_sum_total / unpop_cnt_total if unpop_cnt_total>0 else 0.0
     unpop_ndcg = unpop_ndcg_sum_total / unpop_cnt_total if unpop_cnt_total>0 else 0.0
     return hr_all,recall_all,ndcg_all,pop_hr,pop_recall,pop_ndcg,unpop_hr,unpop_recall,unpop_ndcg
+
+import torch
+
+def test_acc_batch_custom(test_U2I, train_U2I, model, topk=20, batch_size=2048):
+    test_users = list(test_U2I.keys())
+    data_size = len(test_users)
+    hr_all, recall_all, ndcg_all = 0.0, 0.0, 0.0
+    
+    # Process in batches
+    for batch_id in range(0, data_size, batch_size):
+        batch_users = test_users[batch_id : min(batch_id + batch_size, data_size)]
+        
+        # 1. Calculate scores using model's custom logic
+        # model.batch_predict should return Tensor [batch_size, num_items]
+        # We assume model is on the correct device
+        with torch.no_grad():
+            scores = model.batch_predict(batch_users)
+            scores = scores.detach()
+            
+            # 2. Mask training items
+            # We need to iterate because each user has different train items
+            # This part might be slow in pure python loop, but let's try
+            # To vectorize: convert train_U2I to a mask? Too big [B, N].
+            # Scatter write -inf?
+            
+            # Create a mask or just iterate
+            # Since we need to output indices, simple iteration to mask is:
+            for i, u in enumerate(batch_users):
+                if u in train_U2I:
+                    train_items = train_U2I[u]
+                    # train_items might be list.
+                    scores[i, train_items] = -float('inf')
+            
+            # 3. TopK
+            _, indices = torch.topk(scores, k=topk, dim=1)
+            indices = indices.cpu().numpy()
+            
+        # 4. Metric Calculation
+        # Map batch indices 0..B-1 to user ranking
+        # We use compute_ranking_metrics from numba
+        # It expects testusers, testdata, traindata, user_rank_pred_items
+        
+        # Fake testusers as 0..B-1
+        batch_indices = list(range(len(batch_users)))
+        
+        testdata = [test_U2I[u] for u in batch_users]
+        traindata = [train_U2I[u] for u in batch_users] # Note: masked items still passed, but they won't be in predictions
+        
+        # user_rank_pred_items must be indexable by testusers elements
+        # So we pass indices directly.
+        # nb.typed.List is preferred for numba
+        
+        one_batch_metrics = compute_ranking_metrics(
+            nb.typed.List(batch_indices), 
+            nb.typed.List(testdata), 
+            nb.typed.List(traindata), 
+            nb.typed.List(indices), 
+            topk=topk
+        )
+        
+        one_batch_metrics = np.array(one_batch_metrics).T
+        hr_all += np.sum(one_batch_metrics[0])
+        recall_all += np.sum(one_batch_metrics[1])
+        ndcg_all += np.sum(one_batch_metrics[2])
+
+    return hr_all/data_size, recall_all/data_size, ndcg_all/data_size
+
+def test_acc_batch_pop_split_custom(test_U2I, train_U2I, model, item_is_pop, topk=20, batch_size=2048):
+    test_users = list(test_U2I.keys())
+    data_size = len(test_users)
+    
+    hr_all, recall_all, ndcg_all = 0.0, 0.0, 0.0
+    pop_hr_sum_total = 0.0
+    pop_recall_sum_total = 0.0
+    pop_ndcg_sum_total = 0.0
+    pop_cnt_total = 0
+    unpop_hr_sum_total = 0.0
+    unpop_recall_sum_total = 0.0
+    unpop_ndcg_sum_total = 0.0
+    unpop_cnt_total = 0
+    
+    for batch_id in range(0, data_size, batch_size):
+        batch_users = test_users[batch_id : min(batch_id + batch_size, data_size)]
+        
+        with torch.no_grad():
+            scores = model.batch_predict(batch_users)
+            scores = scores.detach()
+            
+            for i, u in enumerate(batch_users):
+                if u in train_U2I:
+                    scores[i, train_U2I[u]] = -float('inf')
+            
+            _, indices = torch.topk(scores, k=topk, dim=1)
+            indices = indices.cpu().numpy()
+
+        # Overall Metrics
+        batch_indices = list(range(len(batch_users)))
+        testdata = [test_U2I[u] for u in batch_users]
+        traindata = [train_U2I[u] for u in batch_users]
+        
+        one_batch_metrics = compute_ranking_metrics(
+            nb.typed.List(batch_indices), 
+            nb.typed.List(testdata), 
+            nb.typed.List(traindata), 
+            nb.typed.List(indices), 
+            topk=topk
+        )
+        one_batch_metrics = np.array(one_batch_metrics).T
+        hr_all += np.sum(one_batch_metrics[0])
+        recall_all += np.sum(one_batch_metrics[1])
+        ndcg_all += np.sum(one_batch_metrics[2])
+        
+        # Pop Split Metrics
+        # compute_ranking_metrics_split uses user_rank_pred_items[i], so it matches indices[i]
+        pop_hr, pop_recall, pop_ndcg, pop_cnt, unpop_hr, unpop_recall, unpop_ndcg, unpop_cnt = compute_ranking_metrics_split(
+            batch_users, 
+            testdata, 
+            traindata, 
+            nb.typed.List(indices), 
+            item_is_pop, 
+            topk=topk
+        )
+        
+        pop_hr_sum_total += pop_hr
+        pop_recall_sum_total += pop_recall
+        pop_ndcg_sum_total += pop_ndcg
+        pop_cnt_total += pop_cnt
+        unpop_hr_sum_total += unpop_hr
+        unpop_recall_sum_total += unpop_recall
+        unpop_ndcg_sum_total += unpop_ndcg
+        unpop_cnt_total += unpop_cnt
+
+    hr_all /= data_size
+    recall_all /= data_size
+    ndcg_all /= data_size
+    
+    pop_hr = pop_hr_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    pop_recall = pop_recall_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    pop_ndcg = pop_ndcg_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    unpop_hr = unpop_hr_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    unpop_recall = unpop_recall_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    unpop_ndcg = unpop_ndcg_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    
+    return hr_all, recall_all, ndcg_all, pop_hr, pop_recall, pop_ndcg, unpop_hr, unpop_recall, unpop_ndcg
+
+import torch
+
+def test_acc_batch_custom(test_U2I, train_U2I, model, topk=20, batch_size=2048):
+    test_users = list(test_U2I.keys())
+    data_size = len(test_users)
+    hr_all, recall_all, ndcg_all = 0.0, 0.0, 0.0
+    
+    # Process in batches
+    for batch_id in range(0, data_size, batch_size):
+        batch_users = test_users[batch_id : min(batch_id + batch_size, data_size)]
+        
+        # 1. Calculate scores using model's custom logic
+        with torch.no_grad():
+            scores = model.batch_predict(batch_users)
+            # Ensure scores are float32 for consistency
+            scores = scores.float()
+            
+            # 2. Mask training items
+            for i, u in enumerate(batch_users):
+                if u in train_U2I:
+                    train_items = train_U2I[u]
+                    if len(train_items) > 0:
+                        # Use scatter_ or direct indexing. Direct indexing is fine for loop.
+                        # We must ensure train_items is a list of ints.
+                        scores[i, train_items] = -float('inf')
+            
+            # 3. TopK
+            # indices: [Batch, TopK]
+            _, indices = torch.topk(scores, k=topk, dim=1)
+            # Convert to numpy int64 to match numba expectation
+            indices = indices.cpu().numpy().astype(np.int64)
+            
+        # 4. Metric Calculation
+        # Map batch indices 0..B-1 to user ranking
+        batch_indices = list(range(len(batch_users)))
+        
+        testdata = [test_U2I[u] for u in batch_users]
+        traindata = [train_U2I[u] for u in batch_users]
+        
+        one_batch_metrics = compute_ranking_metrics(
+            nb.typed.List(batch_indices), 
+            nb.typed.List(testdata), 
+            nb.typed.List(traindata), 
+            nb.typed.List(indices), 
+            topk=topk
+        )
+        
+        one_batch_metrics = np.array(one_batch_metrics).T
+        hr_all += np.sum(one_batch_metrics[0])
+        recall_all += np.sum(one_batch_metrics[1])
+        ndcg_all += np.sum(one_batch_metrics[2])
+
+    return hr_all/data_size, recall_all/data_size, ndcg_all/data_size
+
+def test_acc_batch_pop_split_custom(test_U2I, train_U2I, model, item_is_pop, topk=20, batch_size=2048):
+    test_users = list(test_U2I.keys())
+    data_size = len(test_users)
+    
+    hr_all, recall_all, ndcg_all = 0.0, 0.0, 0.0
+    pop_hr_sum_total = 0.0
+    pop_recall_sum_total = 0.0
+    pop_ndcg_sum_total = 0.0
+    pop_cnt_total = 0
+    unpop_hr_sum_total = 0.0
+    unpop_recall_sum_total = 0.0
+    unpop_ndcg_sum_total = 0.0
+    unpop_cnt_total = 0
+    
+    for batch_id in range(0, data_size, batch_size):
+        batch_users = test_users[batch_id : min(batch_id + batch_size, data_size)]
+        
+        with torch.no_grad():
+            scores = model.batch_predict(batch_users)
+            scores = scores.float()
+            
+            for i, u in enumerate(batch_users):
+                if u in train_U2I:
+                    train_items = train_U2I[u]
+                    if len(train_items) > 0:
+                        scores[i, train_items] = -float('inf')
+            
+            _, indices = torch.topk(scores, k=topk, dim=1)
+            indices = indices.cpu().numpy().astype(np.int64)
+
+        # Overall Metrics
+        batch_indices = list(range(len(batch_users)))
+        testdata = [test_U2I[u] for u in batch_users]
+        traindata = [train_U2I[u] for u in batch_users]
+        
+        one_batch_metrics = compute_ranking_metrics(
+            nb.typed.List(batch_indices), 
+            nb.typed.List(testdata), 
+            nb.typed.List(traindata), 
+            nb.typed.List(indices), 
+            topk=topk
+        )
+        one_batch_metrics = np.array(one_batch_metrics).T
+        hr_all += np.sum(one_batch_metrics[0])
+        recall_all += np.sum(one_batch_metrics[1])
+        ndcg_all += np.sum(one_batch_metrics[2])
+        
+        # Pop Split Metrics
+        pop_hr, pop_recall, pop_ndcg, pop_cnt, unpop_hr, unpop_recall, unpop_ndcg, unpop_cnt = compute_ranking_metrics_split(
+            batch_users, # Note: batch_users here are real IDs, but split function iterates by len(testusers) and uses i. 
+                         # Wait! compute_ranking_metrics_split uses  as key for user_rank_pred_items?
+                         # Let's check compute_ranking_metrics_split implementation.
+                         # Line 104: u = testusers[i]
+                         # Line 107: pred_items_all = user_rank_pred_items[i]  <-- IT USES i, NOT u!
+                         # So passing batch_users (real IDs) is fine as long as we iterate i from 0 to len.
+            testdata, 
+            traindata, 
+            nb.typed.List(indices), 
+            item_is_pop, 
+            topk=topk
+        )
+        
+        pop_hr_sum_total += pop_hr
+        pop_recall_sum_total += pop_recall
+        pop_ndcg_sum_total += pop_ndcg
+        pop_cnt_total += pop_cnt
+        unpop_hr_sum_total += unpop_hr
+        unpop_recall_sum_total += unpop_recall
+        unpop_ndcg_sum_total += unpop_ndcg
+        unpop_cnt_total += unpop_cnt
+
+    hr_all /= data_size
+    recall_all /= data_size
+    ndcg_all /= data_size
+    
+    pop_hr = pop_hr_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    pop_recall = pop_recall_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    pop_ndcg = pop_ndcg_sum_total / pop_cnt_total if pop_cnt_total > 0 else 0.0
+    unpop_hr = unpop_hr_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    unpop_recall = unpop_recall_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    unpop_ndcg = unpop_ndcg_sum_total / unpop_cnt_total if unpop_cnt_total > 0 else 0.0
+    
+    return hr_all, recall_all, ndcg_all, pop_hr, pop_recall, pop_ndcg, unpop_hr, unpop_recall, unpop_ndcg

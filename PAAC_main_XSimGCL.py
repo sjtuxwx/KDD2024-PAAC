@@ -47,6 +47,10 @@ def main_args():
     args.add_argument('--emb_size', default=64, type=int)
     args.add_argument('--num_epoch', default=1, type=int)
     args.add_argument('--keep_layers_list', default='[1]', type=str)
+    args.add_argument('--tau_list', default='[0.5]', type=str)
+    args.add_argument('--pop_gamma_list', default='[0.2]', type=str)
+
+
 
     args.add_argument(
         '--topks', default='[20]', type=str)
@@ -377,6 +381,7 @@ if __name__ == '__main__':
                                 val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, result_path = main(
                                     config)
                                 f.write('\n')
+                                f.write("PAAC_main_XSimGCL")
                                 f.write(
                                     '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}=====keep_layer:{}\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n  Resulst_path:{}\n '
                                     .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.keep_layer,

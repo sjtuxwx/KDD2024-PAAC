@@ -43,7 +43,7 @@ def main_args():
     args.add_argument('--pop_gamma_list', default='[0.8]', type=str)
 
     # User Alignment 权重 (建议 0.01 - 0.1)
-    args.add_argument('--user_align_weight', default=0.05, type=float)
+    args.add_argument('--user_align_weight', default=0.2, type=float)
     # Hard Negative 权重 (参考论文建议 1.1 - 1.5)
     args.add_argument('--hard_neg_weight', default=1.2, type=float)
 
@@ -239,7 +239,7 @@ class PAAC(torch.nn.Module):
         # Total Loss
         batch_loss = bpr_loss + l2_loss + cl_loss + self.user_align_weight * align_loss
 
-        return batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss
+        return batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss, align_loss
 
     def predict(self, user_idx, item_idx):
         user_embedding, item_embedding = self.forward(perturbed=False)
@@ -294,7 +294,7 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
                   unit='batch') as pbar:
             for n, batch in enumerate(dataloader.next_batch_pairwise(data, config.batch_size)):
                 user_idx, pos_idx, neg_idx = batch
-                batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss = model.batch_loss(
+                batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss, align_loss = model.batch_loss(
                     user_idx, pos_idx, neg_idx)
 
                 optimizer.zero_grad()
@@ -305,6 +305,7 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
                 train_res['emb_loss'] += l2_loss.item()
                 train_res['batch_loss'] += batch_loss.item()
                 train_res['cl_loss'] += cl_loss.item()
+                train_res['align_loss'] += align_loss.item()
 
                 pbar.set_postfix({'loss (batch)': batch_loss.item()})
                 pbar.update(1)

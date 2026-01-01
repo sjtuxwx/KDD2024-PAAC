@@ -412,6 +412,7 @@ if __name__ == '__main__':
                             for tau in ast.literal_eval(config.tau_list):
                                 for pop_gamma in ast.literal_eval(config.pop_gamma_list):
                                     f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
+                                    f.write("PAAC_main_gexingdu")
                                     config.temperature = temperature
                                     config.cl_rate = cl_rate
                                     config.layers = layers

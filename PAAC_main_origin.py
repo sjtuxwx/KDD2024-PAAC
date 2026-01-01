@@ -327,6 +327,7 @@ if __name__ == '__main__':
                 for temperature in ast.literal_eval(config.temperature_list):
                     for lambda2 in ast.literal_eval(config.lambada_list):
                         for gamma in ast.literal_eval(config.gama_list):
+                            f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
                             config.temperature = temperature
                             config.cl_rate = cl_rate
                             config.layers = layers
@@ -336,10 +337,11 @@ if __name__ == '__main__':
                             val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, result_path = main(
                                 config)
                             f.write('\n')
+                            f.write("PAAC_main_origin")
                             f.write(
                                 '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n  Resulst_path:{}\n '
                                 .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2,
                                         val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
                                         test_IID_hr, test_IID_recall, test_IID_ndcg, result_path))
                             f.write('\n')
-    f.close()
+                            f.close()
