@@ -94,7 +94,7 @@ class PAAC(torch.nn.Module):
 
         # New parameters for Personalized Popularity Preference
         self.W_pop = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty(self.emb_size, self.emb_size)))
-        self.b_pop = torch.nn.Parameter(torch.zeros(1))
+        self.b_pop = torch.nn.Parameter(torch.zeros(self.num_users))
         self.w1 = torch.nn.Parameter(torch.ones(1))
         self.tau = config.tau
 
@@ -141,41 +141,30 @@ class PAAC(torch.nn.Module):
         neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
 
         # 3. Bilinear Sensitivity beta
-        u_norm = user_emb
+        u_norm = F.normalize(user_emb, p=2, dim=1)
         u_w = torch.matmul(u_norm, self.W_pop)
         
-        pos_emb_norm = pos_emb
-        neg_emb_norm = neg_emb
-        pos_beta = torch.sigmoid(torch.mul(u_w, pos_emb_norm).sum(dim=1)  + self.b_pop)
-        neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb_norm).sum(dim=1) + self.b_pop)
+        pos_emb_norm = F.normalize(pos_emb, p=2, dim=1)
+        neg_emb_norm = F.normalize(neg_emb, p=2, dim=1)
+        pos_beta = torch.sigmoid(torch.mul(u_w, pos_emb_norm).sum(dim=1) + self.b_pop[u_idx])
+        neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb_norm).sum(dim=1) + self.b_pop[u_idx])
 
         # 4. Gaussian Kernel Adaptation M_pop
         pos_m_pop = torch.exp(-torch.pow(pos_p - pos_beta, 2) / self.tau)
         neg_m_pop = torch.exp(-torch.pow(neg_p - neg_beta, 2) / self.tau)
 
         # 5. Final Score
-        pos_score = pos_interest * (self.w1* pos_m_pop)
+        pos_score = pos_interest * (self.w1 * pos_m_pop)
         neg_score = neg_interest * (self.w1 * neg_m_pop)
 
-        bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_score - neg_score))
-        pop_unpop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f > 0)]
-        unpop_pop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f <= 0)]
-        pop_unpop_loss_mean = pop_unpop_loss.mean()
-        unpop_pop_loss_mean = unpop_pop_loss.mean()
-        
+        bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_score - neg_score)).mean()
         # l2_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2) + self.W_pop.norm(2))
-        return self.inter_rate * bpr_loss.mean()
+        return self.inter_rate * bpr_loss
     
     def origin_bpr_loss(self, user_emb, pos_emb, neg_emb, pos_idx, neg_idx):
         pos_int_dot = torch.mul(user_emb, pos_emb).sum(dim=1)
         neg_int_dot = torch.mul(user_emb, neg_emb).sum(dim=1)
-        pos_f = self.pop_count_tensor[pos_idx]
-        neg_f = self.pop_count_tensor[neg_idx]
         bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_int_dot - neg_int_dot))
-        pop_unpop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f > 0)]
-        unpop_pop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f <= 0)]
-        pop_unpop_loss_mean = pop_unpop_loss.mean()
-        unpop_pop_loss_mean = unpop_pop_loss.mean()
         return self.origin_bpr_rate * bpr_loss.mean()
     def freg_loss(self, user_emb, pos_emb, neg_emb):
         reg_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2))
@@ -215,7 +204,7 @@ class PAAC(torch.nn.Module):
         l2_loss = self.freg_loss(user_emb, pos_emb, neg_emb)
         cl_loss, user_cl_loss, item_cl_loss = self.cl_loss(u_idx, i_idx, j_idx)
         batch_loss = bpr_loss + l2_loss + cl_loss + origin_bpr_loss
-        return batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss, origin_bpr_loss
+        return batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss
 
     def predict(self, user_idx, item_idx):
         user_embedding, item_embedding = self.forward(perturbed=False)
@@ -284,14 +273,13 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
             'cl_loss': 0.0,
             'batch_loss': 0.0,
             'align_loss': 0.0,
-            'origin_bpr_loss': 0.0
         }
         # train
         with tqdm(total=math.ceil(len(data.training_data) / config.batch_size), desc=f'Epoch {epoch}',
                   unit='batch') as pbar:
             for n, batch in enumerate(dataloader.next_batch_pairwise(data, config.batch_size)):
                 user_idx, pos_idx, neg_idx = batch
-                batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss, origin_bpr_loss = model.batch_loss(
+                batch_loss, bpr_loss, l2_loss, cl_loss, user_cl_loss, item_cl_loss = model.batch_loss(
                     user_idx, pos_idx, neg_idx)
                 optimizer.zero_grad()
                 batch_loss.backward()
@@ -300,7 +288,6 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
                 train_res['emb_loss'] += l2_loss.item()
                 train_res['batch_loss'] += batch_loss.item()
                 train_res['cl_loss'] += cl_loss.item()
-                train_res['origin_bpr_loss'] += origin_bpr_loss.item()
 
                 pbar.set_postfix({'loss (batch)': batch_loss.item()})
                 pbar.update(1)
@@ -308,7 +295,6 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
         train_res['emb_loss'] = train_res['emb_loss'] / math.ceil(len(data.training_data) / config.batch_size)
         train_res['batch_loss'] = train_res['batch_loss'] / math.ceil(len(data.training_data) / config.batch_size)
         train_res['cl_loss'] = train_res['cl_loss'] / math.ceil(len(data.training_data) / config.batch_size)
-        train_res['origin_bpr_loss'] = train_res['origin_bpr_loss'] / math.ceil(len(data.training_data) / config.batch_size)
 
         user_emb, item_emb = model.forward()
         for _ in range(train_step):

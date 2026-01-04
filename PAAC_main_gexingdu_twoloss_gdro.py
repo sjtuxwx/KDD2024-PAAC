@@ -43,6 +43,7 @@ def main_args():
     args.add_argument('--tau_list', default='[0.1]', type=str)
     args.add_argument('--pop_gamma_list', default='[0.8]', type=str)
     # args.add_argument('--align_reg_list', default='[100]', type=str)
+    args.add_argument('--margin_rate_list', default='[0.5]', type=str)
 
     # train
     args.add_argument('--device', default=0, type=int)
@@ -76,6 +77,7 @@ class PAAC(torch.nn.Module):
         self.pop_gamma = config.pop_gamma
         self.inter_rate = config.inter_rate
         self.origin_bpr_rate = config.origin_bpr_rate
+        self.margin_rate = config.margin_rate
 
         # data
         self.num_users = data.num_users
@@ -162,21 +164,89 @@ class PAAC(torch.nn.Module):
         unpop_pop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f <= 0)]
         pop_unpop_loss_mean = pop_unpop_loss.mean()
         unpop_pop_loss_mean = unpop_pop_loss.mean()
-        
+
+        m_pop_unpop = pos_m_pop[torch.where(pos_p > 0.8)].mean()
+        m_unpop_pop = pos_m_pop[torch.where(pos_p < 0.8)].mean()
+
+        pos_pred_popularity_loss = ((pos_p - pos_beta) ** 2).mean()
+        neg_pred_popularity_loss = ((neg_p - neg_beta) ** 2).mean()
         # l2_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2) + self.W_pop.norm(2))
-        return self.inter_rate * bpr_loss.mean()
+        return self.inter_rate * (bpr_loss.mean() + 1 * pos_pred_popularity_loss + 0 * neg_pred_popularity_loss)
     
     def origin_bpr_loss(self, user_emb, pos_emb, neg_emb, pos_idx, neg_idx):
+        
         pos_int_dot = torch.mul(user_emb, pos_emb).sum(dim=1)
         neg_int_dot = torch.mul(user_emb, neg_emb).sum(dim=1)
         pos_f = self.pop_count_tensor[pos_idx]
         neg_f = self.pop_count_tensor[neg_idx]
-        bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_int_dot - neg_int_dot))
-        pop_unpop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f > 0)]
-        unpop_pop_loss = bpr_loss.detach()[torch.where(pos_f - neg_f <= 0)]
-        pop_unpop_loss_mean = pop_unpop_loss.mean()
-        unpop_pop_loss_mean = unpop_pop_loss.mean()
-        return self.origin_bpr_rate * bpr_loss.mean()
+        pos_p = torch.pow(pos_f / self.max_pop, self.pop_gamma) 
+        neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
+        margin = self.margin_rate * torch.log(neg_p / (pos_p + 1e-8))
+        bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_int_dot - neg_int_dot - margin))
+
+        # 使用当前 batch 内所有 items 的流行度信息，按照 50% 比例划分为 pop / unpop
+        if isinstance(pos_idx, torch.Tensor):
+            pos_items_tensor = pos_idx.detach()
+        else:
+            pos_items_tensor = torch.tensor(pos_idx, dtype=torch.long, device=self.pop_count_tensor.device)
+        if isinstance(neg_idx, torch.Tensor):
+            neg_items_tensor = neg_idx.detach()
+        else:
+            neg_items_tensor = torch.tensor(neg_idx, dtype=torch.long, device=self.pop_count_tensor.device)
+
+        all_items = torch.cat([pos_items_tensor, neg_items_tensor], dim=0).cpu().numpy()
+        batch_unpop_items, batch_pop_items = utils.split_bacth_items(all_items, self.pop_train)
+        batch_unpop_items = set(batch_unpop_items.tolist())
+        batch_pop_items = set(batch_pop_items.tolist())
+
+        # 为每个样本标记正负样本的 pop/unpop 属性
+        pos_idx_list = pos_items_tensor.cpu().tolist()
+        neg_idx_list = neg_items_tensor.cpu().tolist()
+        pos_is_pop = torch.tensor([idx in batch_pop_items for idx in pos_idx_list], device=bpr_loss.device)
+        neg_is_pop = torch.tensor([idx in batch_pop_items for idx in neg_idx_list], device=bpr_loss.device)
+        pos_is_unpop = ~pos_is_pop
+        neg_is_unpop = ~neg_is_pop
+
+        bpr_loss_detached = bpr_loss.detach()
+
+        # 四种组合的 BPR 损失均值：
+        # a) unpop 正样本 vs pop 负样本
+        # b) unpop 正样本 vs unpop 负样本
+        # c) pop 正样本 vs unpop 负样本
+        # d) pop 正样本 vs pop 负样本
+        unpop_pos_pop_neg_mask = pos_is_unpop & neg_is_pop
+        unpop_pos_unpop_neg_mask = pos_is_unpop & neg_is_unpop
+        pop_pos_unpop_neg_mask = pos_is_pop & neg_is_unpop
+        pop_pos_pop_neg_mask = pos_is_pop & neg_is_pop
+
+        if unpop_pos_pop_neg_mask.any():
+            unpop_pos_pop_neg_loss_mean = bpr_loss_detached[unpop_pos_pop_neg_mask].mean()
+        else:
+            unpop_pos_pop_neg_loss_mean = bpr_loss_detached.new_tensor(0.0)
+
+        if unpop_pos_unpop_neg_mask.any():
+            unpop_pos_unpop_neg_loss_mean = bpr_loss_detached[unpop_pos_unpop_neg_mask].mean()
+        else:
+            unpop_pos_unpop_neg_loss_mean = bpr_loss_detached.new_tensor(0.0)
+
+        if pop_pos_unpop_neg_mask.any():
+            pop_pos_unpop_neg_loss_mean = bpr_loss_detached[pop_pos_unpop_neg_mask].mean()
+        else:
+            pop_pos_unpop_neg_loss_mean = bpr_loss_detached.new_tensor(0.0)
+
+        if pop_pos_pop_neg_mask.any():
+            pop_pos_pop_neg_loss_mean = bpr_loss_detached[pop_pos_pop_neg_mask].mean()
+        else:
+            pop_pos_pop_neg_loss_mean = bpr_loss_detached.new_tensor(0.0)
+
+        static_dict = {
+            'unpop_pos_pop_neg_loss_mean': unpop_pos_pop_neg_loss_mean.detach(),
+            'unpop_pos_unpop_neg_loss_mean': unpop_pos_unpop_neg_loss_mean.detach(),
+            'pop_pos_unpop_neg_loss_mean': pop_pos_unpop_neg_loss_mean.detach(),
+            'pop_pos_pop_neg_loss_mean': pop_pos_pop_neg_loss_mean.detach(),
+        }
+        
+        return self.origin_bpr_rate * bpr_loss.mean() + 0.0 * bpr_loss.std()
     def freg_loss(self, user_emb, pos_emb, neg_emb):
         reg_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2))
         if self.inter_rate > 0:
@@ -449,29 +519,31 @@ if __name__ == '__main__':
                                 for pop_gamma in ast.literal_eval(config.pop_gamma_list):
                                     for inter_rate in ast.literal_eval(config.inter_rate_list):
                                         for origin_bpr_rate in ast.literal_eval(config.origin_bpr_rate_list):
-                                            f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
-                                            f.write("PAAC_main_gexingdu_twoloss")
-                                            config.temperature = temperature
-                                            config.cl_rate = cl_rate
-                                            config.layers = layers
-                                            config.align_reg = align_reg
-                                            config.lambda2 = lambda2
-                                            config.gamma = gamma
-                                            config.pop_gamma = pop_gamma
-                                            config.origin_bpr_rate = origin_bpr_rate
-                                            config.tau=tau
-                                            config.inter_rate = inter_rate
-                                            val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg, test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg, result_path = main(
-                                                config)
-                                            f.write('\n')
-                                            f.write(
-                                                '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}====tau:{}====pop_gamma:{}====inter_rate:{}====orign_loss_rate:{}=====\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n test_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} \n test_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} \n Resulst_path:{}\n '
-                                                .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.tau, config.pop_gamma, config.inter_rate, config.origin_bpr_rate,
-                                                        val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
-                                                        test_IID_hr, test_IID_recall, test_IID_ndcg, 
-                                                        test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg,
-                                                        test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg,
-                                                        result_path))
-                                            f.write('\n')
-                                            f.close()
-            # f.close()
+                                            for margin_rate in ast.literal_eval(config.margin_rate_list):
+                                                f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
+                                                f.write("PAAC_main_gexingdu_twoloss_gdro")
+                                                config.temperature = temperature
+                                                config.margin_rate = margin_rate
+                                                config.cl_rate = cl_rate
+                                                config.layers = layers
+                                                config.align_reg = align_reg
+                                                config.lambda2 = lambda2
+                                                config.gamma = gamma
+                                                config.pop_gamma = pop_gamma
+                                                config.origin_bpr_rate = origin_bpr_rate
+                                                config.tau=tau
+                                                config.inter_rate = inter_rate
+                                                val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg, test_IID_hr, test_IID_recall, test_IID_ndcg, test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg, test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg, result_path = main(
+                                                    config)
+                                                f.write('\n')
+                                                f.write(
+                                                    '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}====tau:{}====pop_gamma:{}====inter_rate:{}====orign_loss_rate:{}=====margin_rate:{}=====\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n test_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} \n test_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} \n Resulst_path:{}\n '
+                                                    .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.tau, config.pop_gamma, config.inter_rate, config.origin_bpr_rate, config.margin_rate,
+                                                            val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
+                                                            test_IID_hr, test_IID_recall, test_IID_ndcg, 
+                                                            test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg,
+                                                            test_IID_pop_hr, test_IID_pop_recall, test_IID_pop_ndcg, test_IID_unpop_hr, test_IID_unpop_recall, test_IID_unpop_ndcg,
+                                                            result_path))
+                                                f.write('\n')
+                                                f.close()
+                # f.close()

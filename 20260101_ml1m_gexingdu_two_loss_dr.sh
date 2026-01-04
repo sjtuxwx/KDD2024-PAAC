@@ -14,9 +14,9 @@ python PAAC_main_gexingdu_twoloss_dro.py \
     --EarlyStop 10 \
     --topks '[20]' \
     --seed 12345 \
-    --tau_list '[0.5]' \
+    --tau_list '[0.5, 0.2]' \
     --pop_gamma_list '[0.2]' \
-    --inter_rate_list '[1.0, 5.0, 10.0, 0.5]' \
+    --inter_rate_list '[0.3, 0.5, 1.0, 2.0, 5.0]' \
     --origin_bpr_rate_list '[1.0]' \
     --dro_rate_list '[0.1, 0.2, 0.5, 0.7, 1.0]'
 
@@ -37,7 +37,7 @@ python PAAC_main_gexingdu_twoloss_dro.py \
     --EarlyStop 10 \
     --topks '[20]' \
     --seed 12345 \
-    --tau_list '[0.5]' \
+    --tau_list '[0.5, 0.2]' \
     --pop_gamma_list '[0.2]' \
     --inter_rate_list '[0.0]' \
     --origin_bpr_rate_list '[1.0]' \
@@ -61,7 +61,7 @@ python PAAC_main_gexingdu_twoloss_dro.py \
     --EarlyStop 10 \
     --topks '[20]' \
     --seed 12345 \
-    --tau_list '[0.5]' \
+    --tau_list '[0.5, 0.2]' \
     --pop_gamma_list '[0.2]' \
     --inter_rate_list '[1.0]' \
     --origin_bpr_rate_list '[0.0]' \

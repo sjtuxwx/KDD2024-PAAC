@@ -145,9 +145,12 @@ class PAAC(torch.nn.Module):
         neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
 
         # 3. Bilinear Sensitivity beta
-        u_w = torch.matmul(user_emb, self.W_pop)
-        pos_beta = torch.sigmoid(torch.mul(u_w, pos_emb).sum(dim=1) + self.b_pop)
-        neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb).sum(dim=1) + self.b_pop)
+        u_norm = F.normalize(user_emb, dim=1)
+        u_w = torch.matmul(u_norm, self.W_pop)
+        pos_emb_norm = F.normalize(pos_emb, dim=1)
+        neg_emb_norm = F.normalize(neg_emb, dim=1)
+        pos_beta = torch.sigmoid(torch.mul(u_w, pos_emb_norm).sum(dim=1) + self.b_pop)
+        neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb_norm).sum(dim=1) + self.b_pop)
 
         # 4. Gaussian Kernel Adaptation M_pop
         pos_m_pop = torch.exp(-torch.pow(pos_p - pos_beta, 2) / self.tau)
