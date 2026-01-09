@@ -152,8 +152,8 @@ class PAAC(torch.nn.Module):
         neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb_norm).sum(dim=1) + self.b_pop)
 
         # 4. Gaussian Kernel Adaptation M_pop
-        pos_m_pop = torch.exp(-torch.pow(pos_p - pos_beta, 2) / self.tau)
-        neg_m_pop = torch.exp(-torch.pow(neg_p - neg_beta, 2) / self.tau)
+        pos_m_pop = pos_beta
+        neg_m_pop = neg_beta
 
         # 5. Final Score
         pos_score = pos_interest * (self.w1* pos_m_pop)
@@ -171,7 +171,7 @@ class PAAC(torch.nn.Module):
         pos_pred_popularity_loss = ((pos_p - pos_beta) ** 2).mean()
         neg_pred_popularity_loss = ((neg_p - neg_beta) ** 2).mean()
         # l2_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2) + self.W_pop.norm(2))
-        return self.inter_rate * (bpr_loss.mean() + 1 * pos_pred_popularity_loss + 0 * neg_pred_popularity_loss)
+        return self.inter_rate * bpr_loss.mean()
     
     def origin_bpr_loss(self, user_emb, pos_emb, neg_emb, pos_idx, neg_idx):
         
@@ -181,7 +181,7 @@ class PAAC(torch.nn.Module):
         neg_f = self.pop_count_tensor[neg_idx]
         pos_p = torch.pow(pos_f / self.max_pop, self.pop_gamma) 
         neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
-        margin = self.margin_rate * torch.log((neg_p + 1e-8) / (pos_p + 1e-8))
+        margin = self.margin_rate * torch.log((neg_p+1e-8) / (pos_p + 1e-8))
         bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_int_dot - neg_int_dot - margin))
 
         # 使用当前 batch 内所有 items 的流行度信息，按照 50% 比例划分为 pop / unpop
@@ -521,7 +521,7 @@ if __name__ == '__main__':
                                         for origin_bpr_rate in ast.literal_eval(config.origin_bpr_rate_list):
                                             for margin_rate in ast.literal_eval(config.margin_rate_list):
                                                 f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
-                                                f.write("PAAC_main_gexingdu_twoloss_gdro")
+                                                f.write("PAAC_main_gexingdu_twoloss_gdro_no_match")
                                                 config.temperature = temperature
                                                 config.margin_rate = margin_rate
                                                 config.cl_rate = cl_rate

@@ -89,9 +89,17 @@ class PAAC(torch.nn.Module):
             self.num_users, self.emb_size), mean=0, std=0.1)
         item_emb_weight = torch.nn.init.normal_(torch.empty(
             self.num_items, self.emb_size), mean=0, std=0.1)
+        item_emb_weight1 = torch.nn.init.normal_(torch.empty(
+            self.num_items, self.emb_size), mean=0, std=0.1)
         self.user_embeddings = torch.nn.Embedding(
             self.num_users, self.emb_size, _weight=user_emb_weight)
         self.item_embeddings = torch.nn.Embedding(
+            self.num_items, self.emb_size, _weight=item_emb_weight1)
+        
+        # self.user_embeddings_1 = torch.nn.Embedding(
+        #     self.num_users, self.emb_size, _weight=user_emb_weight)
+        
+        self.item_embeddings_1 = torch.nn.Embedding(
             self.num_items, self.emb_size, _weight=item_emb_weight)
 
         # New parameters for Personalized Popularity Preference
@@ -146,8 +154,8 @@ class PAAC(torch.nn.Module):
         u_norm = user_emb
         u_w = torch.matmul(u_norm, self.W_pop)
         
-        pos_emb_norm = pos_emb
-        neg_emb_norm = neg_emb
+        pos_emb_norm = self.item_embeddings_1(torch.LongTensor(pos_idx).to(self.device))
+        neg_emb_norm = self.item_embeddings_1(torch.LongTensor(neg_idx).to(self.device))
         pos_beta = torch.sigmoid(torch.mul(u_w, pos_emb_norm).sum(dim=1)  + self.b_pop)
         neg_beta = torch.sigmoid(torch.mul(u_w, neg_emb_norm).sum(dim=1) + self.b_pop)
 
@@ -170,8 +178,18 @@ class PAAC(torch.nn.Module):
 
         pos_pred_popularity_loss = ((pos_p - pos_beta) ** 2).mean()
         neg_pred_popularity_loss = ((neg_p - neg_beta) ** 2).mean()
+        # 6. Orthogonality loss: 让 pos_emb_norm 与 pos_emb 尽量正交
+        # 计算余弦相似度，越接近0表示越正交，损失取绝对值或平方
+        pos_emb_norm_unit = F.normalize(pos_emb_norm, dim=1)      # [batch, emb_size]
+        pos_emb_unit = F.normalize(pos_emb, dim=1)                # [batch, emb_size]
+        ortho_sim = (pos_emb_norm_unit * pos_emb_unit).sum(dim=1)  # [batch], 范围[-1,1]
+        ortho_loss = torch.mean(ortho_sim ** 2)                   # 平方后越小越正交
+
         # l2_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2) + self.W_pop.norm(2))
-        return self.inter_rate * (bpr_loss.mean() + 1 * pos_pred_popularity_loss + 0 * neg_pred_popularity_loss)
+        return self.inter_rate * (bpr_loss.mean() + ortho_loss)  
+        
+        # l2_loss = self.decay * (user_emb.norm(2) + pos_emb.norm(2) + neg_emb.norm(2) + self.W_pop.norm(2))
+        return self.inter_rate * (bpr_loss.mean())
     
     def origin_bpr_loss(self, user_emb, pos_emb, neg_emb, pos_idx, neg_idx):
         

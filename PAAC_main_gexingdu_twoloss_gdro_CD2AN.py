@@ -383,7 +383,17 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
         user_emb, item_emb = model.forward()
         for _ in range(train_step):
             G1, G2 = dataloader.user_items_2_group_pop(data)
-            align_loss = utils.alignment_user(item_emb[G1], item_emb[G2]) * config.align_reg
+            # 将 numpy 索引转换为张量，保证在正确 device 上进行高效索引
+            G1_tensor = torch.as_tensor(G1, device=model.device, dtype=torch.long)
+            G2_tensor = torch.as_tensor(G2, device=model.device, dtype=torch.long)
+
+            # 带权对齐：根据流行度与相似度动态调节拉近力度
+            align_loss = utils.alignment_user_weighted(
+                item_emb[G1_tensor],
+                item_emb[G2_tensor],
+                model.pop_count_tensor[G1_tensor],
+                model.pop_count_tensor[G2_tensor],
+            ) * config.align_reg
             optimizer.zero_grad()
             align_loss.backward()
             optimizer.step()
@@ -521,7 +531,7 @@ if __name__ == '__main__':
                                         for origin_bpr_rate in ast.literal_eval(config.origin_bpr_rate_list):
                                             for margin_rate in ast.literal_eval(config.margin_rate_list):
                                                 f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
-                                                f.write("PAAC_main_gexingdu_twoloss_gdro")
+                                                f.write("PAAC_main_gexingdu_twoloss_gdro_CD2AN")
                                                 config.temperature = temperature
                                                 config.margin_rate = margin_rate
                                                 config.cl_rate = cl_rate

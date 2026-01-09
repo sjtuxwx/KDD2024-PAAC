@@ -45,6 +45,11 @@ def main_args():
     # args.add_argument('--align_reg_list', default='[100]', type=str)
     args.add_argument('--margin_rate_list', default='[0.5]', type=str)
 
+    # Ablation switches
+    args.add_argument('--use_margin', type=ast.literal_eval, default=True)
+    args.add_argument('--use_pop_matching', type=ast.literal_eval, default=True)
+    args.add_argument('--use_alignment', type=ast.literal_eval, default=True)
+
     # train
     args.add_argument('--device', default=0, type=int)
     args.add_argument('--EarlyStop', default=10, type=int)
@@ -78,6 +83,8 @@ class PAAC(torch.nn.Module):
         self.inter_rate = config.inter_rate
         self.origin_bpr_rate = config.origin_bpr_rate
         self.margin_rate = config.margin_rate
+        self.use_margin = config.use_margin
+        self.use_pop_matching = config.use_pop_matching
 
         # data
         self.num_users = data.num_users
@@ -181,7 +188,10 @@ class PAAC(torch.nn.Module):
         neg_f = self.pop_count_tensor[neg_idx]
         pos_p = torch.pow(pos_f / self.max_pop, self.pop_gamma) 
         neg_p = torch.pow(neg_f / self.max_pop, self.pop_gamma)
-        margin = self.margin_rate * torch.log((neg_p + 1e-8) / (pos_p + 1e-8))
+        if self.use_margin:
+            margin = self.margin_rate * torch.log((neg_p + 1e-8) / (pos_p + 1e-8))
+        else:
+            margin = torch.zeros_like(pos_int_dot)
         bpr_loss = -torch.log(10e-8 + torch.sigmoid(pos_int_dot - neg_int_dot - margin))
 
         # 使用当前 batch 内所有 items 的流行度信息，按照 50% 比例划分为 pop / unpop
@@ -280,7 +290,10 @@ class PAAC(torch.nn.Module):
         user_emb = user_embedding[u_idx]
         pos_emb = item_embedding[i_idx]
         neg_emb = item_embedding[j_idx]
-        bpr_loss = self.bpr_loss(user_emb, pos_emb, neg_emb, i_idx, j_idx, u_idx)
+        if self.use_pop_matching:
+            bpr_loss = self.bpr_loss(user_emb, pos_emb, neg_emb, i_idx, j_idx, u_idx)
+        else:
+            bpr_loss = torch.tensor(0.0, device=user_emb.device)
         origin_bpr_loss = self.origin_bpr_loss(user_emb, pos_emb, neg_emb, i_idx, j_idx)
         l2_loss = self.freg_loss(user_emb, pos_emb, neg_emb)
         cl_loss, user_cl_loss, item_cl_loss = self.cl_loss(u_idx, i_idx, j_idx)
@@ -381,15 +394,17 @@ def train(config, data, model, optimizer, early_stopping, logger, train_step=1):
         train_res['origin_bpr_loss'] = train_res['origin_bpr_loss'] / math.ceil(len(data.training_data) / config.batch_size)
 
         user_emb, item_emb = model.forward()
-        for _ in range(train_step):
-            G1, G2 = dataloader.user_items_2_group_pop(data)
-            align_loss = utils.alignment_user(item_emb[G1], item_emb[G2]) * config.align_reg
-            optimizer.zero_grad()
-            align_loss.backward()
-            optimizer.step()
-            train_res['align_loss'] += align_loss.item()
-
-        train_res['align_loss'] = train_res['align_loss'] / train_step
+        if config.use_alignment:
+            for _ in range(train_step):
+                G1, G2 = dataloader.user_items_2_group_pop(data)
+                align_loss = utils.alignment_user(item_emb[G1], item_emb[G2]) * config.align_reg
+                optimizer.zero_grad()
+                align_loss.backward()
+                optimizer.step()
+                train_res['align_loss'] += align_loss.item()
+            train_res['align_loss'] = train_res['align_loss'] / train_step
+        else:
+            train_res['align_loss'] = 0.0
 
         training_logs = 'epoch: %d, ' % epoch
         for name, value in train_res.items():
@@ -431,7 +446,7 @@ def main(config):
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
-    logger_file_name = os.path.join(result_path, 'train_logger')
+    logger_file_name = os.path.join(result_path, 'train_logger_ablation')
     logger = utils.get_logger(logger_file_name)
     for name, value in vars(config).items():
         logger.info('%20s =======> %-20s' % (name, value))
@@ -521,7 +536,7 @@ if __name__ == '__main__':
                                         for origin_bpr_rate in ast.literal_eval(config.origin_bpr_rate_list):
                                             for margin_rate in ast.literal_eval(config.margin_rate_list):
                                                 f = open('/'.join((config.result_path, config.model, config.dataset_name)) + '/best_performace.txt', 'a+')
-                                                f.write("PAAC_main_gexingdu_twoloss_gdro")
+                                                f.write("PAAC_main_gexingdu_twoloss_gdro_xiaorong")
                                                 config.temperature = temperature
                                                 config.margin_rate = margin_rate
                                                 config.cl_rate = cl_rate
@@ -537,8 +552,8 @@ if __name__ == '__main__':
                                                     config)
                                                 f.write('\n')
                                                 f.write(
-                                                    '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}====tau:{}====pop_gamma:{}====inter_rate:{}====orign_loss_rate:{}=====margin_rate:{}=====\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n test_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} \n test_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} \n Resulst_path:{}\n '
-                                                    .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.tau, config.pop_gamma, config.inter_rate, config.origin_bpr_rate, config.margin_rate,
+                                                    '\n ====layers:{}===cl-rate:{}===align_reg:{}===gamma:{}====lambda2:{}====tau:{}====pop_gamma:{}====inter_rate:{}====orign_loss_rate:{}=====margin_rate:{}====use_margin:{}====use_pop_matching:{}====use_alignment:{}====\n  best_hr@20:{}=====best_recall@20:{}====best_ndcg@20:{}\n test_OOD_hr@20:{:.6f}   test_OOD_recall@20:{:.6f}   test_OOD_ndcg@20:{:.6f}\n test_IID_hr@20:{:.6f}   test_IID_recall@20:{:.6f}   test_IID_ndcg@20:{:.6f} \n test_OOD_pop_hr@20:{:.6f}   test_OOD_pop_recall@20:{:.6f}   test_OOD_pop_ndcg@20:{:.6f}   test_OOD_unpop_hr@20:{:.6f}   test_OOD_unpop_recall@20:{:.6f}   test_OOD_unpop_ndcg@20:{:.6f} \n test_IID_pop_hr@20:{:.6f}   test_IID_pop_recall@20:{:.6f}   test_IID_pop_ndcg@20:{:.6f}   test_IID_unpop_hr@20:{:.6f}   test_IID_unpop_recall@20:{:.6f}   test_IID_unpop_ndcg@20:{:.6f} \n Resulst_path:{}\n '
+                                                    .format(config.layers, config.cl_rate, config.align_reg, config.gamma, config.lambda2, config.tau, config.pop_gamma, config.inter_rate, config.origin_bpr_rate, config.margin_rate, config.use_margin, config.use_pop_matching, config.use_alignment,
                                                             val_hr, val_recall, val_ndcg, test_OOD_hr, test_OOD_recall, test_OOD_ndcg,
                                                             test_IID_hr, test_IID_recall, test_IID_ndcg, 
                                                             test_OOD_pop_hr, test_OOD_pop_recall, test_OOD_pop_ndcg, test_OOD_unpop_hr, test_OOD_unpop_recall, test_OOD_unpop_ndcg,

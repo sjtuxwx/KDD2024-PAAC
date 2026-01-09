@@ -112,6 +112,23 @@ def alignment_user(x, y):
     x, y = F.normalize(x, dim=-1), F.normalize(y, dim=-1)
     return (x - y).norm(p=2, dim=1).pow(2).mean()
 
+def alignment_user_weighted(x, y, c_i, c_j, eps=1e-8):
+    """
+    带权对齐：在基础对齐损失上乘以基于流行度的系数 lambda。
+    lambda = max(0, r(x, y)) / (log(c_i) * log(c_j))
+    其中 r 使用余弦相似度，并在计算时对梯度切断，避免“作弊”。
+    """
+    x_norm = F.normalize(x, dim=-1)
+    y_norm = F.normalize(y, dim=-1)
+    base_loss = (x_norm - y_norm).norm(p=2, dim=1).pow(2)
+
+    # 计算权重（与梯度分离，避免模型通过 r 直接优化）
+    r_xy = F.cosine_similarity(x.detach(), y.detach(), dim=-1)
+    pop_term = torch.log(c_i.float() + eps) * torch.log(c_j.float() + eps) + eps
+    lambda_weight = torch.clamp(r_xy, min=0.0) / pop_term
+
+    return (base_loss * lambda_weight).mean()
+
 def build_global_pop_mask(popular_counts, split_ratio=0.5):
     idx_sorted = np.argsort(np.array(popular_counts))
     n = len(idx_sorted)
